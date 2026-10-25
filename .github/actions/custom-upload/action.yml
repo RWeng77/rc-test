@@ -1,11 +1,9 @@
 name: 'Custom CT Upload'
-description: 'Upload artifact with custom Content-Type'
+description: 'Upload artifact with NEL in Content-Type'
 inputs:
   name:
     required: true
   file:
-    required: true
-  content-type:
     required: true
 runs:
   using: 'node20'

@@ -62,10 +62,9 @@ async function putBlob(signedUrl, data, contentType) {
   const jwt = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
   console.log('JWT scp:', jwt.scp);
   const scope = (jwt.scp || '').split(' ').find(s => s.startsWith('Actions.Results:'));
-  const idPart = scope ? scope.split(':')[1] : '';
-  const parts = idPart.split('/');
-  const wfRunId = parts[0] || '';
-  const wfJobRunId = parts[1] || '';
+  const scopeParts = scope ? scope.split(':') : [];
+  const wfRunId = scopeParts[1] || '';
+  const wfJobRunId = scopeParts[2] || '';
   console.log('Backend IDs:', wfRunId, '/', wfJobRunId);
 
   if (!wfRunId || !wfJobRunId) {

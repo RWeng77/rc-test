@@ -9,6 +9,8 @@ const resultsUrl = process.env.ACTIONS_RESULTS_URL;
 const token = process.env.ACTIONS_RUNTIME_TOKEN;
 const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
 
+// Phase 1: use clean mimeType for CreateArtifact, NEL only for blob CT
+const CLEAN_CT = 'application/json';
 const NEL_CT = 'application/json' + String.fromCharCode(0x85);
 
 function fail(msg) { console.log('::error::' + msg); process.exit(1); }
@@ -91,7 +93,7 @@ function azurePut(signedUrl, data, contentType) {
       workflowJobRunBackendId: wfJobRunId,
       name: name,
       version: 7,
-      mimeType: { value: NEL_CT },
+      mimeType: { value: CLEAN_CT },
     }
   );
   console.log('Create:', JSON.stringify(createResp).substring(0, 400));

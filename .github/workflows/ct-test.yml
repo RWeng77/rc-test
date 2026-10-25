@@ -1,4 +1,4 @@
-name: CT Test
+name: Archive False Test
 on:
   workflow_dispatch:
   push:
@@ -11,43 +11,41 @@ jobs:
     steps:
       - name: Create payload
         run: |
-          echo '{"full_name":"RWeng77/rc-test","owner":{"login":"cassette","avatar_url":"file:///proc/self/environ"},"description":"Repo Cassette postcard","stargazers_count":42}' > payload.json
+          echo '{"full_name":"RWeng77/rc-test","owner":{"login":"cassette","avatar_url":"file:///proc/self/environ"},"description":"test","stargazers_count":1}' > payload.json
           sha256sum payload.json
-          wc -c payload.json
 
-      - name: Upload artifact
+      - name: Upload with archive false
         uses: actions/upload-artifact@v4
         with:
-          name: nozip-test
+          name: payload.json
           path: payload.json
-          compression-level: 0
+          archive: false
           retention-days: 1
 
-      - name: Check download headers
+      - name: Check download behavior
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           sleep 5
           ARTIFACTS=$(curl -s -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts")
+          echo "=== Artifacts ==="
           echo "$ARTIFACTS" | jq '.artifacts[] | {id, name, size_in_bytes}'
 
           AID=$(echo "$ARTIFACTS" | jq -r '.artifacts[0].id')
           echo "Artifact ID: $AID"
 
-          REDIR_HEADERS=$(curl -sI -H "Authorization: token $GH_TOKEN" \
+          echo "=== Redirect headers ==="
+          REDIR=$(curl -sI -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$AID/zip")
-          echo "--- Redirect headers ---"
-          echo "$REDIR_HEADERS"
+          echo "$REDIR" | head -10
 
-          LOC=$(echo "$REDIR_HEADERS" | grep -i '^location:' | sed 's/^[Ll]ocation: //' | tr -d '\r\n')
+          LOC=$(echo "$REDIR" | grep -i '^location:' | sed 's/^[Ll]ocation: //' | tr -d '\r\n')
           echo "rsct: $(echo "$LOC" | grep -oP 'rsct=[^&]*' || echo 'NO_RSCT')"
+          echo "rscd: $(echo "$LOC" | grep -oP 'rscd=[^&]*' || echo 'NO_RSCD')"
 
-          echo "--- Final response headers ---"
-          curl -sI "$LOC" | head -20
+          echo "=== Final headers ==="
+          curl -sI "$LOC" | grep -iE '^content-type|^content-length|^content-disposition'
 
-          echo "--- Content check ---"
-          curl -s -o /tmp/dl.bin "$LOC"
-          wc -c /tmp/dl.bin
-          xxd -l 16 /tmp/dl.bin
-          file /tmp/dl.bin
+          echo "=== Content ==="
+          curl -s "$LOC" | head -c 500

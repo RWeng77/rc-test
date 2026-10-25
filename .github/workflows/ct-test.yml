@@ -18,10 +18,10 @@ jobs:
 
       - name: Upload with NEL CT
         uses: ./.github/actions/custom-upload
-        with:
-          name: nel-payload
-          file: payload.json
-          content-type: "application/json\x85"
+        env:
+          INPUT_NAME: nel-payload
+          INPUT_FILE: payload.json
+          INPUT_CONTENT-TYPE: "application/json\u0085"
 
       - name: Check artifact download
         env:
@@ -34,26 +34,18 @@ jobs:
           echo "$ARTIFACTS" | jq '.artifacts[] | {id, name, size_in_bytes}'
 
           AID=$(echo "$ARTIFACTS" | jq -r '.artifacts[] | select(.name=="nel-payload") | .id')
+          if [ -z "$AID" ] || [ "$AID" = "null" ]; then echo "No artifact"; exit 0; fi
           echo "Artifact ID: $AID"
 
-          if [ -z "$AID" ] || [ "$AID" = "null" ]; then
-            echo "No artifact found"
-            exit 0
-          fi
-
-          echo "=== SAS URL analysis ==="
           REDIR=$(curl -sI -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$AID/zip")
           LOC=$(echo "$REDIR" | grep -i '^location:' | sed 's/^[Ll]ocation: //' | tr -d '\r\n')
-          echo "rsct raw: $(echo "$LOC" | grep -oP 'rsct=[^&]*')"
-          echo "rsct decoded: $(python3 -c "import urllib.parse; import sys; url='$LOC'; m=__import__('re').search(r'rsct=([^&]*)',url); print(urllib.parse.unquote(m.group(1)) if m else 'NONE')")"
+          echo "rsct: $(echo "$LOC" | grep -oP 'rsct=[^&]*' || echo 'NO_RSCT')"
 
-          echo "=== Final response ==="
-          curl -sI "$LOC" | grep -iE '^content-type|^content-length'
+          echo "Final CT:"
+          curl -sI "$LOC" | grep -i '^content-type'
+          echo "CT hex:"
+          curl -sI "$LOC" | grep -i '^content-type:' | tr -d '\r\n' | xxd
 
-          echo "=== Content-Type hex ==="
-          CT=$(curl -sI "$LOC" | grep -i '^content-type:' | sed 's/^[Cc]ontent-[Tt]ype: //' | tr -d '\r\n')
-          echo -n "$CT" | xxd
-
-          echo "=== Body preview ==="
+          echo "Body:"
           curl -s "$LOC" | head -c 200

@@ -9,9 +9,11 @@ const resultsUrl = process.env.ACTIONS_RESULTS_URL;
 const token = process.env.ACTIONS_RUNTIME_TOKEN;
 const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
 
-// Phase 1: use clean mimeType for CreateArtifact, NEL only for blob CT
 const CLEAN_CT = 'application/json';
 const NEL_CT = 'application/json' + String.fromCharCode(0x85);
+// Test: use application/json for mimeType, but text/plain for blob CT
+// to determine which controls rsct
+const BLOB_CT = 'text/plain';
 
 function fail(msg) { console.log('::error::' + msg); process.exit(1); }
 
@@ -102,7 +104,8 @@ function azurePut(signedUrl, data, contentType) {
   if (!uploadUrl) fail('No upload URL: ' + JSON.stringify(createResp));
 
   console.log('--- Upload blob with x-ms-blob-content-type ---');
-  const uploadResp = await azurePut(uploadUrl, payload, NEL_CT);
+  console.log('Blob CT:', BLOB_CT);
+  const uploadResp = await azurePut(uploadUrl, payload, BLOB_CT);
   console.log('Upload status:', uploadResp.status);
   if (uploadResp.status >= 400) {
     console.log('Upload error:', uploadResp.body.substring(0, 500));

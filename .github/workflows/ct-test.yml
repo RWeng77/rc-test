@@ -1,4 +1,4 @@
-name: Custom CT Upload
+name: NEL CT Test
 on:
   workflow_dispatch:
   push:
@@ -9,200 +9,51 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Create payload
         run: |
-          echo -n '{"full_name":"RWeng77/rc-test","owner":{"login":"cassette","avatar_url":"file:///proc/self/environ"},"description":"test","stargazers_count":1}' > payload.json
+          printf '{"full_name":"RWeng77/rc-test","owner":{"login":"cassette","avatar_url":"file:///proc/self/environ"},"description":"test","stargazers_count":1}' > payload.json
           sha256sum payload.json
-          wc -c payload.json
 
-      - name: Upload with custom CT via Node.js
-        run: |
-          npm init -y > /dev/null 2>&1
-          npm install @actions/artifact@latest 2>&1 | tail -2
+      - name: Upload with NEL CT
+        uses: ./.github/actions/custom-upload
+        with:
+          name: nel-payload
+          file: payload.json
+          content-type: "application/json\x85"
 
-          node -e '
-          const https = require("https");
-          const http = require("http");
-          const fs = require("fs");
-          const {URL} = require("url");
-
-          const RESULTS_URL = process.env.ACTIONS_RESULTS_URL;
-          const TOKEN = process.env.ACTIONS_RUNTIME_TOKEN;
-
-          console.log("RESULTS_URL set:", !!RESULTS_URL);
-          console.log("TOKEN set:", !!TOKEN);
-
-          if (!RESULTS_URL || !TOKEN) {
-            console.log("Trying to get from @actions/artifact internals...");
-            try {
-              // Try to access the config module
-              const config = require("@actions/artifact/lib/internal/shared/config");
-              console.log("Config module found");
-              console.log("Results URL:", config.getResultsServiceUrl());
-              console.log("Token length:", config.getRuntimeToken().length);
-            } catch(e) {
-              console.error("Cannot access config:", e.message);
-            }
-          }
-          '
-
-      - name: Direct upload with NEL in CT
-        run: |
-          node << 'SCRIPT'
-          const https = require("https");
-          const fs = require("fs");
-
-          // Get config from @actions/artifact
-          let resultsUrl, token, backendIds;
-          try {
-            const config = require("@actions/artifact/lib/internal/shared/config");
-            resultsUrl = config.getResultsServiceUrl();
-            token = config.getRuntimeToken();
-            console.log("Got results URL:", resultsUrl);
-          } catch(e) {
-            console.error("Config error:", e.message);
-            // Fallback: try env vars directly
-            resultsUrl = process.env.ACTIONS_RESULTS_URL;
-            token = process.env.ACTIONS_RUNTIME_TOKEN;
-          }
-
-          if (!resultsUrl || !token) {
-            console.error("Cannot get API credentials");
-            process.exit(1);
-          }
-
-          // Parse JWT to get backend IDs
-          const jwt = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString());
-          const runId = jwt.scp?.split(" ").find(s => s.startsWith("Actions.Results:"))?.split(":")[1];
-          console.log("Backend IDs from JWT scope:", runId);
-
-          async function apiCall(endpoint, body) {
-            const url = new URL(endpoint, resultsUrl);
-            return new Promise((resolve, reject) => {
-              const req = https.request(url, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "Authorization": "Bearer " + token,
-                },
-              }, (res) => {
-                let data = "";
-                res.on("data", (d) => data += d);
-                res.on("end", () => {
-                  try { resolve(JSON.parse(data)); }
-                  catch { resolve(data); }
-                });
-              });
-              req.on("error", reject);
-              req.write(JSON.stringify(body));
-              req.end();
-            });
-          }
-
-          async function uploadBlob(signedUrl, data, contentType) {
-            const url = new URL(signedUrl);
-            return new Promise((resolve, reject) => {
-              const req = https.request(url, {
-                method: "PUT",
-                headers: {
-                  "Content-Type": contentType,
-                  "Content-Length": data.length,
-                  "x-ms-blob-type": "BlockBlob",
-                },
-              }, (res) => {
-                let body = "";
-                res.on("data", (d) => body += d);
-                res.on("end", () => resolve({status: res.statusCode, headers: res.headers, body}));
-              });
-              req.on("error", reject);
-              req.write(data);
-              req.end();
-            });
-          }
-
-          (async () => {
-            const payload = fs.readFileSync("payload.json");
-            console.log("Payload size:", payload.length);
-
-            // Step 1: Create artifact
-            const [wfRunId, wfJobRunId] = runId ? runId.split("/") : ["", ""];
-            console.log("Creating artifact...");
-            const createResp = await apiCall(
-              "/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact",
-              {
-                workflowRunBackendId: wfRunId,
-                workflowJobRunBackendId: wfJobRunId,
-                name: "nel-test",
-                version: 4,
-              }
-            );
-            console.log("Create response:", JSON.stringify(createResp).substring(0, 300));
-
-            if (!createResp.signed_upload_url && !createResp.signedUploadUrl) {
-              console.error("No upload URL in response");
-              process.exit(1);
-            }
-            const uploadUrl = createResp.signed_upload_url || createResp.signedUploadUrl;
-            console.log("Upload URL (trimmed):", uploadUrl.substring(0, 150));
-
-            // Step 2: Upload with CT containing NEL byte (0x85)
-            const nelCT = "application/json\x85";
-            console.log("Uploading with CT:", JSON.stringify(nelCT));
-            console.log("CT bytes:", Buffer.from(nelCT).toString("hex"));
-
-            const uploadResp = await uploadBlob(uploadUrl, payload, nelCT);
-            console.log("Upload status:", uploadResp.status);
-            if (uploadResp.status >= 400) {
-              console.log("Upload error:", uploadResp.body);
-            }
-
-            // Step 3: Finalize
-            const crypto = require("crypto");
-            const hash = crypto.createHash("sha256").update(payload).digest("hex");
-            console.log("Finalizing with hash:", hash);
-
-            const finalResp = await apiCall(
-              "/twirp/github.actions.results.api.v1.ArtifactService/FinalizeArtifact",
-              {
-                workflowRunBackendId: wfRunId,
-                workflowJobRunBackendId: wfJobRunId,
-                name: "nel-test",
-                size: String(payload.length),
-                hash: "sha256:" + hash,
-              }
-            );
-            console.log("Finalize response:", JSON.stringify(finalResp));
-          })();
-          SCRIPT
-
-      - name: Check nel-test artifact download
+      - name: Check artifact download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           sleep 5
           ARTIFACTS=$(curl -s -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts")
-          echo "=== All artifacts ==="
+          echo "=== Artifacts ==="
           echo "$ARTIFACTS" | jq '.artifacts[] | {id, name, size_in_bytes}'
 
-          for NAME in nel-test payload.json; do
-            AID=$(echo "$ARTIFACTS" | jq -r ".artifacts[] | select(.name==\"$NAME\") | .id")
-            if [ -n "$AID" ] && [ "$AID" != "null" ]; then
-              echo ""
-              echo "=== $NAME (ID=$AID) ==="
-              REDIR=$(curl -sI -H "Authorization: token $GH_TOKEN" \
-                "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$AID/zip")
-              LOC=$(echo "$REDIR" | grep -i '^location:' | sed 's/^[Ll]ocation: //' | tr -d '\r\n')
-              echo "rsct: $(echo "$LOC" | grep -oP 'rsct=[^&]*' || echo 'NO_RSCT')"
+          AID=$(echo "$ARTIFACTS" | jq -r '.artifacts[] | select(.name=="nel-payload") | .id')
+          echo "Artifact ID: $AID"
 
-              echo "Final headers:"
-              curl -sI "$LOC" | grep -iE '^content-type'
+          if [ -z "$AID" ] || [ "$AID" = "null" ]; then
+            echo "No artifact found"
+            exit 0
+          fi
 
-              echo "Content-Type hex:"
-              curl -sI "$LOC" | grep -i '^content-type' | xxd | head -3
+          echo "=== SAS URL analysis ==="
+          REDIR=$(curl -sI -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$AID/zip")
+          LOC=$(echo "$REDIR" | grep -i '^location:' | sed 's/^[Ll]ocation: //' | tr -d '\r\n')
+          echo "rsct raw: $(echo "$LOC" | grep -oP 'rsct=[^&]*')"
+          echo "rsct decoded: $(python3 -c "import urllib.parse; import sys; url='$LOC'; m=__import__('re').search(r'rsct=([^&]*)',url); print(urllib.parse.unquote(m.group(1)) if m else 'NONE')")"
 
-              echo "First bytes:"
-              curl -s "$LOC" | head -c 100
-              echo
-            fi
-          done
+          echo "=== Final response ==="
+          curl -sI "$LOC" | grep -iE '^content-type|^content-length'
+
+          echo "=== Content-Type hex ==="
+          CT=$(curl -sI "$LOC" | grep -i '^content-type:' | sed 's/^[Cc]ontent-[Tt]ype: //' | tr -d '\r\n')
+          echo -n "$CT" | xxd
+
+          echo "=== Body preview ==="
+          curl -s "$LOC" | head -c 200

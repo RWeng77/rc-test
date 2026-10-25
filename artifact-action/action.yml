@@ -1,0 +1,4 @@
+name: Race artifact MIME upload v2
+runs:
+  using: node24
+  main: index.mjs

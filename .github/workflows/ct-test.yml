@@ -1,4 +1,4 @@
-name: NEL CT Test
+name: NEL CT v9
 on:
   workflow_dispatch:
   push:
@@ -16,15 +16,11 @@ jobs:
           printf '{"full_name":"RWeng77/rc-test","owner":{"login":"cassette","avatar_url":"file:///proc/self/environ"},"description":"test","stargazers_count":1}' > payload.json
           sha256sum payload.json
 
-      - name: Upload with patched CT
-        uses: actions/upload-artifact@main
-        env:
-          NODE_OPTIONS: "--require ./patch.js"
+      - name: Custom upload with NEL CT
+        uses: ./.github/actions/custom-upload
         with:
           name: nel-payload
-          path: payload.json
-          archive: false
-          retention-days: 1
+          file: payload.json
 
       - name: Check artifact download
         env:
@@ -37,29 +33,28 @@ jobs:
           echo "$ARTIFACTS" | jq '.artifacts[] | {id, name, size_in_bytes}'
 
           AID=$(echo "$ARTIFACTS" | jq -r '.artifacts[] | select(.name=="nel-payload") | .id')
-          if [ -z "$AID" ] || [ "$AID" = "null" ]; then echo "No artifact"; exit 0; fi
+          if [ -z "$AID" ] || [ "$AID" = "null" ]; then echo "No artifact found"; exit 0; fi
           echo "Artifact ID: $AID"
 
           REDIR=$(curl -sI -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$AID/zip")
           LOC=$(echo "$REDIR" | grep -i '^location:' | sed 's/^[Ll]ocation: //' | tr -d '\r\n')
-          echo "rsct param: $(echo "$LOC" | grep -oP 'rsct=[^&]*' || echo 'NO_RSCT')"
-          python3 -c "
-import urllib.parse, re
-url = '''$LOC'''
-m = re.search(r'rsct=([^&]*)', url)
-if m:
-    decoded = urllib.parse.unquote(m.group(1))
-    print('rsct decoded:', repr(decoded))
-    print('rsct hex:', decoded.encode('latin-1','replace').hex())
-else:
-    print('NO rsct')
-"
+          echo "rsct: $(echo "$LOC" | grep -oP 'rsct=[^&]*' || echo 'NO_RSCT')"
 
-          echo "=== Response CT ==="
-          curl -sI "$LOC" | grep -i '^content-type'
+          python3 << 'PY'
+          import urllib.parse, re, sys
+          url = """$LOC"""
+          m = re.search(r'rsct=([^&]*)', url)
+          if m:
+              decoded = urllib.parse.unquote(m.group(1))
+              print(f'rsct decoded: {repr(decoded)}')
+              print(f'rsct hex: {decoded.encode("latin-1","replace").hex()}')
+          PY
+
+          echo "=== Response headers ==="
+          curl -sI "$LOC" | grep -iE '^content-type|^content-length'
           echo "=== CT hex ==="
-          CT_LINE=$(curl -sI "$LOC" | grep -i '^content-type:' | tr -d '\r\n')
-          echo -n "$CT_LINE" | xxd
+          curl -sI "$LOC" | grep -i '^content-type:' | tr -d '\r\n' | xxd
+          echo ""
           echo "=== Body ==="
           curl -s "$LOC" | head -c 200

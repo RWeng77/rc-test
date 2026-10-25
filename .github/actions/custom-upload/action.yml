@@ -1,0 +1,12 @@
+name: 'Custom CT Upload'
+description: 'Upload artifact with custom Content-Type'
+inputs:
+  name:
+    required: true
+  file:
+    required: true
+  content-type:
+    required: true
+runs:
+  using: 'node20'
+  main: 'index.js'

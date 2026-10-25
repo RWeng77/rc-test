@@ -18,10 +18,9 @@ jobs:
 
       - name: Upload with NEL CT
         uses: ./.github/actions/custom-upload
-        env:
-          INPUT_NAME: nel-payload
-          INPUT_FILE: payload.json
-          INPUT_CONTENT-TYPE: "application/json\u0085"
+        with:
+          name: nel-payload
+          file: payload.json
 
       - name: Check artifact download
         env:
@@ -40,12 +39,11 @@ jobs:
           REDIR=$(curl -sI -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$AID/zip")
           LOC=$(echo "$REDIR" | grep -i '^location:' | sed 's/^[Ll]ocation: //' | tr -d '\r\n')
-          echo "rsct: $(echo "$LOC" | grep -oP 'rsct=[^&]*' || echo 'NO_RSCT')"
+          echo "rsct param: $(echo "$LOC" | grep -oP 'rsct=[^&]*' || echo 'NO_RSCT')"
 
-          echo "Final CT:"
+          echo "=== Response CT ==="
           curl -sI "$LOC" | grep -i '^content-type'
-          echo "CT hex:"
+          echo "=== CT hex ==="
           curl -sI "$LOC" | grep -i '^content-type:' | tr -d '\r\n' | xxd
-
-          echo "Body:"
+          echo "=== Body ==="
           curl -s "$LOC" | head -c 200

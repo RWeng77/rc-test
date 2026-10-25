@@ -1,4 +1,4 @@
-name: Archive False Test
+name: Archive False Main
 on:
   workflow_dispatch:
   push:
@@ -14,8 +14,8 @@ jobs:
           echo '{"full_name":"RWeng77/rc-test","owner":{"login":"cassette","avatar_url":"file:///proc/self/environ"},"description":"test","stargazers_count":1}' > payload.json
           sha256sum payload.json
 
-      - name: Upload with archive false
-        uses: actions/upload-artifact@v4
+      - name: Upload with archive false (main branch)
+        uses: actions/upload-artifact@main
         with:
           name: payload.json
           path: payload.json
@@ -35,17 +35,22 @@ jobs:
           AID=$(echo "$ARTIFACTS" | jq -r '.artifacts[0].id')
           echo "Artifact ID: $AID"
 
-          echo "=== Redirect headers ==="
+          echo "=== Redirect ==="
           REDIR=$(curl -sI -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$AID/zip")
-          echo "$REDIR" | head -10
+          echo "$REDIR" | head -6
 
           LOC=$(echo "$REDIR" | grep -i '^location:' | sed 's/^[Ll]ocation: //' | tr -d '\r\n')
           echo "rsct: $(echo "$LOC" | grep -oP 'rsct=[^&]*' || echo 'NO_RSCT')"
           echo "rscd: $(echo "$LOC" | grep -oP 'rscd=[^&]*' || echo 'NO_RSCD')"
 
-          echo "=== Final headers ==="
+          echo "=== Final CT ==="
           curl -sI "$LOC" | grep -iE '^content-type|^content-length|^content-disposition'
 
-          echo "=== Content ==="
-          curl -s "$LOC" | head -c 500
+          echo "=== First 200 bytes ==="
+          curl -s "$LOC" | head -c 200
+          echo
+          echo "=== File type ==="
+          curl -s -o /tmp/dl.bin "$LOC"
+          file /tmp/dl.bin
+          xxd -l 8 /tmp/dl.bin

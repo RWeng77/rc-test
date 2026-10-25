@@ -1,0 +1,20 @@
+name: Proto Duplicate
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'trigger.txt'
+
+jobs:
+  carrier:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm install --ignore-scripts
+      - uses: ./proto-dup-action

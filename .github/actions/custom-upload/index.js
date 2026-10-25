@@ -2,16 +2,13 @@ const https = require('https');
 const fs = require('fs');
 const crypto = require('crypto');
 
-// Read inputs from environment (GitHub Actions sets INPUT_NAME, INPUT_FILE, etc.)
 const name = process.env['INPUT_NAME'];
 const file = process.env['INPUT_FILE'];
 const ct = process.env['INPUT_CONTENT-TYPE'];
 const resultsUrl = process.env.ACTIONS_RESULTS_URL;
 const token = process.env.ACTIONS_RUNTIME_TOKEN;
 
-function log(msg) { process.stdout.write(msg + '
-'); }
-function fail(msg) { log('::error::' + msg); process.exit(1); }
+function fail(msg) { console.log('::error::' + msg); process.exit(1); }
 
 async function post(endpoint, body) {
   const url = new URL(endpoint, resultsUrl);
@@ -49,39 +46,39 @@ async function putBlob(signedUrl, data, contentType) {
 }
 
 (async () => {
-  log('Results URL: ' + (resultsUrl ? 'SET' : 'NOT SET'));
-  log('Token: ' + (token ? 'SET (len=' + token.length + ')' : 'NOT SET'));
-  if (!resultsUrl || !token) fail('Missing ACTIONS_RESULTS_URL or ACTIONS_RUNTIME_TOKEN');
+  console.log('Results URL: ' + (resultsUrl ? 'SET' : 'NOT SET'));
+  console.log('Token: ' + (token ? 'SET' : 'NOT SET'));
+  if (!resultsUrl || !token) fail('Missing env vars');
 
   const jwt = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
   const scope = (jwt.scp || '').split(' ').find(s => s.startsWith('Actions.Results:'));
   const ids = scope ? scope.split(':')[1] : '';
   const [wfRunId, wfJobRunId] = ids.split('/');
-  log('Backend IDs: ' + wfRunId + ' / ' + wfJobRunId);
+  console.log('Backend IDs: ' + wfRunId + ' / ' + wfJobRunId);
 
   const payload = fs.readFileSync(file);
-  log('File: ' + file + ' size: ' + payload.length);
-  log('CT: ' + JSON.stringify(ct) + ' hex: ' + Buffer.from(ct).toString('hex'));
+  console.log('File: ' + file + ' size: ' + payload.length);
+  console.log('CT input: ' + JSON.stringify(ct) + ' hex: ' + Buffer.from(ct).toString('hex'));
 
-  log('Creating artifact: ' + name);
+  console.log('Creating artifact: ' + name);
   const createResp = await post('/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact', {
     workflowRunBackendId: wfRunId, workflowJobRunBackendId: wfJobRunId, name: name, version: 4,
   });
-  log('Create resp: ' + JSON.stringify(createResp).substring(0, 300));
+  console.log('Create resp: ' + JSON.stringify(createResp).substring(0, 300));
 
   const uploadUrl = createResp.signed_upload_url || createResp.signedUploadUrl;
   if (!uploadUrl) fail('No upload URL');
 
-  log('Uploading blob...');
+  console.log('Uploading blob...');
   const uploadResp = await putBlob(uploadUrl, payload, ct);
-  log('Upload status: ' + uploadResp.status);
-  if (uploadResp.status >= 400) log('Error: ' + uploadResp.body.substring(0, 300));
+  console.log('Upload status: ' + uploadResp.status);
+  if (uploadResp.status >= 400) console.log('Error: ' + uploadResp.body.substring(0, 300));
 
   const hash = crypto.createHash('sha256').update(payload).digest('hex');
-  log('Finalizing, hash: ' + hash);
+  console.log('Finalizing, hash: ' + hash);
   const finalResp = await post('/twirp/github.actions.results.api.v1.ArtifactService/FinalizeArtifact', {
     workflowRunBackendId: wfRunId, workflowJobRunBackendId: wfJobRunId, name: name,
     size: String(payload.length), hash: 'sha256:' + hash,
   });
-  log('Finalize: ' + JSON.stringify(finalResp));
+  console.log('Finalize: ' + JSON.stringify(finalResp));
 })().catch(e => fail(e.message));

@@ -1,0 +1,4 @@
+name: Proto duplicate MIME carrier
+runs:
+  using: node24
+  main: index.mjs

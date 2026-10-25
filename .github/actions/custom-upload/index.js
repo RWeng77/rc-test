@@ -93,7 +93,7 @@ function azurePut(signedUrl, data, contentType) {
       workflowJobRunBackendId: wfJobRunId,
       name: name,
       version: 7,
-      mimeType: { value: CLEAN_CT },
+      mimeType: CLEAN_CT,
     }
   );
   console.log('Create:', JSON.stringify(createResp).substring(0, 400));
@@ -117,7 +117,7 @@ function azurePut(signedUrl, data, contentType) {
       workflowJobRunBackendId: wfJobRunId,
       name: name,
       size: String(payload.length),
-      hash: { value: 'sha256:' + hash },
+      hash: 'sha256:' + hash,
     }
   );
   console.log('Finalize:', JSON.stringify(finalResp));

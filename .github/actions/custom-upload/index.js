@@ -95,7 +95,7 @@ function azurePut(signedUrl, data, contentType) {
       workflowJobRunBackendId: wfJobRunId,
       name: name,
       version: 7,
-      mimeType: NEL_CT,
+      mimeType: CLEAN_CT,
     }
   );
   console.log('Create:', JSON.stringify(createResp).substring(0, 400));

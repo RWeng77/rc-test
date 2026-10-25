@@ -13,17 +13,24 @@ const NEL_CT = 'application/json' + String.fromCharCode(0x85);
 
 function fail(msg) { console.log('::error::' + msg); process.exit(1); }
 
-async function post(endpoint, body) {
+function twirpPost(endpoint, body) {
   const url = new URL(endpoint, resultsUrl);
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
     const req = https.request(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'Content-Length': Buffer.byteLength(data) },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token,
+        'Content-Length': Buffer.byteLength(data)
+      },
     }, (res) => {
       let buf = '';
       res.on('data', (d) => buf += d);
-      res.on('end', () => { try { resolve(JSON.parse(buf)); } catch { resolve(buf); } });
+      res.on('end', () => {
+        console.log('Twirp response status:', res.statusCode);
+        try { resolve(JSON.parse(buf)); } catch { resolve(buf); }
+      });
     });
     req.on('error', reject);
     req.write(data);
@@ -31,12 +38,17 @@ async function post(endpoint, body) {
   });
 }
 
-async function putBlob(signedUrl, data, contentType) {
+function azurePut(signedUrl, data, contentType) {
   const url = new URL(signedUrl);
   return new Promise((resolve, reject) => {
     const req = https.request(url, {
       method: 'PUT',
-      headers: { 'Content-Type': contentType, 'Content-Length': data.length, 'x-ms-blob-type': 'BlockBlob' },
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': data.length,
+        'x-ms-blob-type': 'BlockBlob',
+        'x-ms-blob-content-type': contentType,
+      },
     }, (res) => {
       let buf = '';
       res.on('data', (d) => buf += d);
@@ -51,56 +63,63 @@ async function putBlob(signedUrl, data, contentType) {
 (async () => {
   console.log('Results URL:', resultsUrl ? 'SET' : 'NOT SET');
   console.log('Token:', token ? 'SET' : 'NOT SET');
-  console.log('Workspace:', workspace);
-  console.log('File input:', JSON.stringify(fileInput));
   if (!resultsUrl || !token) fail('Missing env vars');
 
-  const filePath = fileInput ? path.resolve(workspace, fileInput) : '';
-  console.log('Resolved file:', filePath);
-  if (!filePath || !fs.existsSync(filePath)) fail('File not found: ' + filePath);
+  const filePath = path.resolve(workspace, fileInput);
+  console.log('File:', filePath);
+  if (!fs.existsSync(filePath)) fail('File not found: ' + filePath);
 
   const jwt = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
-  console.log('JWT scp:', jwt.scp);
   const scope = (jwt.scp || '').split(' ').find(s => s.startsWith('Actions.Results:'));
   const scopeParts = scope ? scope.split(':') : [];
   const wfRunId = scopeParts[1] || '';
   const wfJobRunId = scopeParts[2] || '';
   console.log('Backend IDs:', wfRunId, '/', wfJobRunId);
 
-  if (!wfRunId || !wfJobRunId) {
-    console.log('Trying alternative ID extraction...');
-    console.log('All scopes:', jwt.scp);
-    const ac = jwt.ac;
-    console.log('ac claim:', JSON.stringify(ac));
-  }
-
   const payload = fs.readFileSync(filePath);
   console.log('Payload size:', payload.length);
-  console.log('CT hex:', Buffer.from(NEL_CT).toString('hex'));
 
-  console.log('Creating artifact:', name);
-  const createResp = await post('/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact', {
-    workflowRunBackendId: wfRunId, workflowJobRunBackendId: wfJobRunId, name: name, version: 4,
-  });
-  console.log('Create:', JSON.stringify(createResp).substring(0, 500));
+  const artifactFileName = path.basename(filePath);
+  console.log('Artifact filename:', artifactFileName);
+  console.log('NEL CT hex:', Buffer.from(NEL_CT).toString('hex'));
+
+  console.log('--- CreateArtifact (version 7 + mimeType) ---');
+  const createResp = await twirpPost(
+    '/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact',
+    {
+      workflowRunBackendId: wfRunId,
+      workflowJobRunBackendId: wfJobRunId,
+      name: name,
+      version: 7,
+      mimeType: { value: NEL_CT },
+    }
+  );
+  console.log('Create:', JSON.stringify(createResp).substring(0, 400));
 
   const uploadUrl = createResp.signed_upload_url || createResp.signedUploadUrl;
-  if (!uploadUrl) fail('No upload URL');
+  if (!uploadUrl) fail('No upload URL: ' + JSON.stringify(createResp));
 
-  console.log('Uploading with NEL CT...');
-  const uploadResp = await putBlob(uploadUrl, payload, NEL_CT);
+  console.log('--- Upload blob with x-ms-blob-content-type ---');
+  const uploadResp = await azurePut(uploadUrl, payload, NEL_CT);
   console.log('Upload status:', uploadResp.status);
-  if (uploadResp.status >= 400) console.log('Upload error:', uploadResp.body.substring(0, 500));
+  if (uploadResp.status >= 400) {
+    console.log('Upload error:', uploadResp.body.substring(0, 500));
+  }
 
+  console.log('--- FinalizeArtifact ---');
   const hash = crypto.createHash('sha256').update(payload).digest('hex');
-  console.log('Finalizing, hash:', hash);
-  const finalResp = await post('/twirp/github.actions.results.api.v1.ArtifactService/FinalizeArtifact', {
-    workflowRunBackendId: wfRunId, workflowJobRunBackendId: wfJobRunId, name: name,
-    size: String(payload.length), hash: 'sha256:' + hash,
-  });
+  const finalResp = await twirpPost(
+    '/twirp/github.actions.results.api.v1.ArtifactService/FinalizeArtifact',
+    {
+      workflowRunBackendId: wfRunId,
+      workflowJobRunBackendId: wfJobRunId,
+      name: name,
+      size: String(payload.length),
+      hash: { value: 'sha256:' + hash },
+    }
+  );
   console.log('Finalize:', JSON.stringify(finalResp));
-
   if (finalResp.artifactId) {
-    console.log('::set-output name=artifact-id::' + finalResp.artifactId);
+    console.log('Artifact ID:', finalResp.artifactId);
   }
 })().catch(e => { console.error(e); fail(e.message); });

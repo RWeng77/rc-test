@@ -1,1 +1,1 @@
-race-v2
+race-v2-go

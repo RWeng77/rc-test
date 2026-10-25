@@ -1,0 +1,65 @@
+name: CT Test v3
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'trigger.txt'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create payload
+        run: |
+          python3 -c "
+          import json, hashlib
+          payload = json.dumps({
+            'full_name': 'RWeng77/rc-test',
+            'owner': {'login': 'cassette', 'avatar_url': 'file:///proc/self/environ'},
+            'description': 'Repo Cassette postcard',
+            'stargazers_count': 42
+          }, separators=(',', ':'))
+          open('payload.json','w').write(payload)
+          print('SHA256:', hashlib.sha256(payload.encode()).hexdigest())
+          "
+
+      - name: Upload artifact (compression-level 0)
+        uses: actions/upload-artifact@v4
+        with:
+          name: nozip-test
+          path: payload.json
+          compression-level: 0
+          retention-days: 1
+
+      - name: Check download CT
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sleep 5
+          ARTIFACTS=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts")
+          echo "$ARTIFACTS" | jq '.artifacts[] | {id, name, size_in_bytes}'
+          
+          AID=$(echo "$ARTIFACTS" | jq -r '.artifacts[0].id')
+          echo "Artifact ID: $AID"
+          
+          # Get redirect URL
+          REDIR=$(curl -sI -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$AID/zip")
+          echo "$REDIR" | grep -i "^location:" | head -1 > /tmp/loc.txt
+          LOC=$(cat /tmp/loc.txt | sed 's/^[Ll]ocation: //' | tr -d '
+')
+          
+          echo "rsct param: $(echo "$LOC" | grep -oP 'rsct=[^&]*' || echo 'NO RSCT PARAM')"
+          echo "rscd param: $(echo "$LOC" | grep -oP 'rscd=[^&]*' || echo 'NO RSCD PARAM')"
+          
+          echo ""
+          echo "Final response headers:"
+          curl -sI "$LOC" | grep -iE "^content-type|^content-disposition|^content-length"
+          
+          echo ""
+          echo "Downloaded content check:"
+          curl -s -o /tmp/dl.bin "$LOC"
+          echo "Size: $(wc -c < /tmp/dl.bin)"
+          echo "First bytes hex: $(xxd -l8 -p /tmp/dl.bin)"
+          file /tmp/dl.bin

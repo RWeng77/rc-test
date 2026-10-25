@@ -1,0 +1,17 @@
+name: Race artifact MIME
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'trigger.txt'
+
+jobs:
+  race:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run race
+        uses: ./.github/actions/race-upload
